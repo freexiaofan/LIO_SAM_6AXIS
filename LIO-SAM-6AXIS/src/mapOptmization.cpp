@@ -2,6 +2,9 @@
 #include "lio_sam_6axis/cloud_info.h"
 #include "lio_sam_6axis/save_map.h"
 
+#include <fstream>
+#include <iomanip>
+
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -153,6 +156,11 @@ class mapOptimization : public ParamServer
   Eigen::Affine3f incrementalOdometryAffineFront;
   Eigen::Affine3f incrementalOdometryAffineBack;
 
+  // TUM format output for trajectory
+  std::ofstream tumFile;
+  std::string tumFilePath;
+  bool enableTumOutput;
+
 
   mapOptimization()
   {
@@ -188,6 +196,20 @@ class mapOptimization : public ParamServer
     downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
     downSizeFilterICP.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
     downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
+
+    // Initialize TUM format output
+    nh.param<bool>("tum_output_enable", enableTumOutput, true);
+    nh.param<std::string>("tum_output_path", tumFilePath, "/home/tyjt/Desktop/ros_ws/lio_sam_poses.txt");
+    
+    if (enableTumOutput) {
+        tumFile.open(tumFilePath, std::ios::out);
+        if (tumFile.is_open()) {
+            ROS_INFO("TUM trajectory output enabled: %s", tumFilePath.c_str());
+        } else {
+            ROS_ERROR("Failed to open TUM output file: %s", tumFilePath.c_str());
+            enableTumOutput = false;
+        }
+    }
 
     allocateMemory();
   }
@@ -1458,7 +1480,8 @@ class mapOptimization : public ParamServer
         curGPSPoint.x = gps_x;
         curGPSPoint.y = gps_y;
         curGPSPoint.z = gps_z;
-        if (pointDistance(curGPSPoint, lastGPSPoint) < 5.0)
+        // if (pointDistance(curGPSPoint, lastGPSPoint) < 5.0)
+        if (pointDistance(curGPSPoint, lastGPSPoint) < 0.5)
           continue;
         else
           lastGPSPoint = curGPSPoint;
@@ -1643,6 +1666,9 @@ class mapOptimization : public ParamServer
     laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
     laserOdometryROS.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
     pubLaserOdometryGlobal.publish(laserOdometryROS);
+    
+    // Write to TUM format file
+    writeTumPose(laserOdometryROS);
 
     // Publish TF
     static tf::TransformBroadcaster br;
@@ -1756,6 +1782,32 @@ class mapOptimization : public ParamServer
         lastSLAMInfoPubSize = cloudKeyPoses6D->size();
       }
     }
+  }
+
+  ~mapOptimization()
+  {
+    if (tumFile.is_open()) {
+      tumFile.close();
+      ROS_INFO("TUM trajectory file closed");
+    }
+  }
+
+  void writeTumPose(const nav_msgs::Odometry& odom)
+  {
+    if (!enableTumOutput || !tumFile.is_open()) {
+      return;
+    }
+
+    // TUM format: timestamp tx ty tz qx qy qz qw
+    double timestamp = odom.header.stamp.toSec();
+    tumFile << std::fixed << std::setprecision(3) << timestamp << " "
+            << std::setprecision(6) << odom.pose.pose.position.x << " "
+            << odom.pose.pose.position.y << " "
+            << odom.pose.pose.position.z << " "
+            << odom.pose.pose.orientation.x << " "
+            << odom.pose.pose.orientation.y << " "
+            << odom.pose.pose.orientation.z << " "
+            << odom.pose.pose.orientation.w << std::endl;
   }
 };
 

@@ -6,7 +6,6 @@
 #include <tf/transform_datatypes.h>
 #include <GeographicLib/Geocentric.hpp>
 #include <GeographicLib/LocalCartesian.hpp>
-#include <GeographicLib/Geoid.hpp>
 #include <deque>
 #include <mutex>
 
@@ -25,12 +24,18 @@ public:
 
 private:
     void GNSSCB(const sensor_msgs::NavSatFixConstPtr &msg) {
-        std::cout << "gps status: " << msg->status.status << std::endl;
+        std::cout << "gps status: " <<  int(msg->status.status) << " " << msg->status.service << std::endl;
         if (std::isnan(msg->latitude + msg->longitude + msg->altitude)) {
             return;
         }
+        if (int(msg->status.status) != 2)
+        {
+            std::cout << " NOT RTK FIX --------------- return: "   << std::endl;
+            return;
+        }
+        
         Eigen::Vector3d lla(msg->latitude, msg->longitude, msg->altitude);
-        //std::cout << "LLA: " << lla.transpose() << std::endl;
+        std::cout << "LLA: " << lla.transpose() << std::endl;
         if (!initENU) {
             ROS_INFO("Init Orgin GPS LLA  %f, %f, %f", msg->latitude, msg->longitude,
                      msg->altitude);
@@ -54,7 +59,7 @@ private:
         }
 
         /** if you have some satellite info or rtk status info, put it here*/
-        int status = -1;
+        int status = int(msg->status.status);
         int satell_num = -1;
         double x, y, z;
         // LLA->ENU, better accuacy than gpsTools especially for z value
@@ -135,6 +140,7 @@ private:
 int main(int argc, char **argv) {
     ros::init(argc, argv, "lio_sam_6axis");
     ros::NodeHandle nh;
+    ROS_INFO("\033[1;32m---->   139 Simple GPS Odmetry Started.\033[0m");
     GNSSOdom gps(nh);
     ROS_INFO("\033[1;32m----> Simple GPS Odmetry Started.\033[0m");
     ros::spin();

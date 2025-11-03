@@ -1,0 +1,15 @@
+<launch>
+    <arg name="project" default="lio_sam_6axis"/>
+    <rosparam file="$(find lio_sam_6axis)/config/hilti_pandar.yaml" command="load"/>
+
+    <node pkg="$(arg project)" type="$(arg project)_mapOptmization" name="$(arg project)_mapOptmization" 
+           output="screen">
+        
+        <!-- TUM format trajectory output parameters -->
+        <param name="tum_output_enable" value="true" />
+        <param name="tum_output_path" value="/home/tyjt/Desktop/ros_ws/trajectory_tum.txt" />
+    </node>
+
+          <!--  launch-prefix="gdb -ex run -args"  -->
+
+</launch>

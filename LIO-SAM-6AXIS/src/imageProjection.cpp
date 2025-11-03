@@ -72,6 +72,17 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(OusterPointXYZIRT,
                                           (uint32_t, range, range)
 )
 
+struct rslidarPointXYZIRT
+{
+  PCL_ADD_POINT4D;
+  float intensity;
+  uint16_t ring = 0;
+  double timestamp = 0;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(rslidarPointXYZIRT,
+                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(uint16_t, ring, ring)(double, timestamp, timestamp))
 
 
 //struct OusterPointXYZIRT {
@@ -331,14 +342,31 @@ public:
             for (size_t i = 0; i < tmpPandarCloudIn->size(); i++) {
                 auto &src = tmpPandarCloudIn->points[i];
                 auto &dst = laserCloudIn->points[i];
-                dst.x = src.y * -1;
-                dst.y = src.x;
-                //        dst.x = src.x;
-                //        dst.y = src.y;
+                // dst.x = src.y * -1;
+                // dst.y = src.x;
+                dst.x = src.x;
+                dst.y = src.y;
                 dst.z = src.z;
                 dst.intensity = src.intensity;
                 dst.ring = src.ring;
                 //dst.tiSme = src.t * 1e-9f;
+                dst.time = src.timestamp - time_begin; // s
+            }
+        }  else if (sensor == SensorType::rslidar)
+        {
+            // Convert to Velodyne format
+            pcl::moveFromROSMsg(currentCloudMsg, *tmpPandarCloudIn);
+            laserCloudIn->points.resize(tmpPandarCloudIn->size());
+            laserCloudIn->is_dense = tmpPandarCloudIn->is_dense;
+            double time_begin = tmpPandarCloudIn->points[0].timestamp;
+            for (size_t i = 0; i < tmpPandarCloudIn->size(); i++) {
+                auto &src = tmpPandarCloudIn->points[i];
+                auto &dst = laserCloudIn->points[i];
+                dst.x = src.x ;
+                dst.y = src.y ;
+                dst.z = src.z;
+                dst.intensity = src.intensity;
+                dst.ring = src.ring;
                 dst.time = src.timestamp - time_begin; // s
             }
         } else {
@@ -351,6 +379,7 @@ public:
         timeScanCur = cloudHeader.stamp.toSec();
         // timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
         timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
+        std::cout << std::fixed << std::setprecision(3) << "382 " << timeScanCur << " " << timeScanEnd << std::endl;
 
         if (debugLidarTimestamp) {
             std::cout << std::fixed << std::setprecision(12) << "end time from pcd and size: "
@@ -656,12 +685,17 @@ public:
             if (range < lidarMinRange || range > lidarMaxRange)
                 continue;
 
+            if (thisPoint.z > 25.0 || thisPoint.z < -2.20)
+            {
+                continue;
+            }
+
             int rowIdn = laserCloudIn->points[i].ring;
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
-            if (rowIdn % downsampleRate != 0)
-                continue;
+            // if (rowIdn % downsampleRate != 0)
+            //     continue;
 
             int columnIdn = -1;
             if (sensor == SensorType::VELODYNE || sensor == SensorType::OUSTER || sensor == SensorType::HESAI) {

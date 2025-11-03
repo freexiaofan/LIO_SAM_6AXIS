@@ -1,7 +1,8 @@
 <launch>
 
     <arg name="project" default="lio_sam_6axis"/>
-
+    <arg name="bag_path" default="/mnt/nvme0n1p2/data/1011.bag"/>
+    <arg name="sequence" default="qcsl"/>
     <!-- Parameters -->
     <rosparam file="$(find lio_sam_6axis)/config/hilti_pandar.yaml" command="load"/>
 

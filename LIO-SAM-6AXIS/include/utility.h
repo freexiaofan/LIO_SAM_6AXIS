@@ -60,7 +60,7 @@ using namespace std;
 typedef pcl::PointXYZI PointType;
 
 enum class SensorType {
-    VELODYNE, OUSTER, LIVOX, HESAI, VELODYNE_M1600
+    VELODYNE, OUSTER, LIVOX, HESAI, VELODYNE_M1600, rslidar
 };
 
 class ParamServer {
@@ -231,6 +231,9 @@ public:
             sensor = SensorType::HESAI;
         } else if (sensorStr == "velodyne_m1600") {
             sensor = SensorType::VELODYNE_M1600;
+        } else if (sensorStr == "rslidar") {
+            sensor = SensorType::rslidar;
+           std::cout << "SensorType::rslidar:"   << std::endl;
         } else {
             ROS_ERROR_STREAM(
                      "Invalid sensor type (must be either 'velodyne' or 'ouster' or 'livox' or 'velodyne_m1600' ): " << sensorStr);
@@ -254,11 +257,25 @@ public:
         nh.param<vector<double >>("lio_sam_6axis/extrinsicRot", extRotV, vector<double>());
         nh.param<vector<double >>("lio_sam_6axis/extrinsicRPY", extRPYV, vector<double>());
         nh.param<vector<double >>("lio_sam_6axis/extrinsicTrans", extTransV, vector<double>());
-        extRot = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRotV.data(), 3, 3);
-        extRPY = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRPYV.data(), 3, 3);
-        extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extTransV.data(), 3, 1);
+
+        for (size_t i = 0; i < 3; i++)
+        {
+            for (size_t j = 0; j < 3; j++)
+            {
+                ROS_WARN("%lf", extRotV[i*3 + j]);
+                extRot(i,j) = extRotV[i*3 + j];
+                extRPY(i,j) = extRPYV[i*3 + j]; 
+            }
+            extTrans(i) = extTransV[i];
+            std::cout << "extTrans[" << i << "] = " << extTrans(i) << std::endl;
+        }
+
+        // extRot = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRotV.data(), 3, 3);
+        // extRPY = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extRPYV.data(), 3, 3);
+        // extTrans = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(extTransV.data(), 3, 1);
         extQRPY = Eigen::Quaterniond(extRPY);
-        //    std::cout << "qw:" << extQRPY << std::endl;
+        //    std::cout << "qw:" << extQRPY.data() << std::endl;
+           std::cout << "qw:" << extRPY.matrix() << std::endl;
 
         if (sensor == SensorType::HESAI) {
             nh.param<vector<double >>("lio_sam_6axis/imuAccBias_N", imuAccBias_NV, vector<double>());
@@ -308,7 +325,7 @@ public:
         nh.param<float>("lio_sam_6axis/globalMapVisualizationPoseDensity", globalMapVisualizationPoseDensity, 10.0);
         nh.param<float>("lio_sam_6axis/globalMapVisualizationLeafSize", globalMapVisualizationLeafSize, 1.0);
 
-        nh.param<float>("lio_sam_6axis/globalMapLeafSize", globalMapLeafSize, 1.0);
+        nh.param<float>("lio_sam_6axis/globalMapLeafSize", globalMapLeafSize, 0.50);
 
         usleep(100);
     }
