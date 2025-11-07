@@ -187,6 +187,50 @@ public:
     // Eigen::Affine3f transGPS;
     // Eigen::Vector3d transLLA;
     Eigen::Vector3d originLLA;
+
+    // **新增: 局部坐标系管理结构**
+    struct LocalCoordinateSystem {
+        bool initialized = false;
+        Eigen::Vector3d utm_origin;      // UTM原点 (x, y, z)
+        Eigen::Vector3d lla_origin;      // LLA原点 (lat, lon, alt)
+        double timestamp_origin = 0.0;   // 原点时间戳
+        bool save = false;
+        
+        void reset() {
+            initialized = false;
+            utm_origin.setZero();
+            lla_origin.setZero();
+            timestamp_origin = 0.0;
+        }
+        
+        // 将UTM坐标转换为局部坐标
+        Eigen::Vector3d toLocal(const Eigen::Vector3d& utm_point) {
+            if (!initialized) {
+                ROS_ERROR("LocalCoordinateSystem not initialized!");
+                return utm_point;
+            }
+            
+            return utm_point - utm_origin;
+        }
+        
+        // 将局部坐标转换为UTM坐标
+        Eigen::Vector3d toUTM(const Eigen::Vector3d& local_point) const {
+            if (!initialized) {
+                ROS_ERROR("LocalCoordinateSystem not initialized!");
+                return local_point;
+            }
+            return local_point + utm_origin;
+        }
+        
+        // 检查坐标是否在合理范围内
+        bool isValid(const Eigen::Vector3d& local_point, double threshold = 10000.0) const {
+            return std::abs(local_point.x()) < threshold &&
+                   std::abs(local_point.y()) < threshold &&
+                   std::abs(local_point.z()) < threshold;
+        }
+    };
+    
+    LocalCoordinateSystem local_coord_system_;
  
     // bool gpsAvialble = false;
     bool systemInitialized = false;
@@ -407,18 +451,52 @@ public:
     }
 
     void gpsHandler(const nav_msgs::Odometry::ConstPtr &gpsMsg) {
-        // if (useGPS) {
+
         int status = int(gpsMsg->pose.covariance[4]);
         if (status != 2 ) {
             std::cout << "GPS status  "<< status ;
             ROS_ERROR("GPS covariance invalid!");
             return;
         }
-        if (1) {
-            mtxGpsInfo.lock();
-            gpsQueue.push_back(*gpsMsg);
-            mtxGpsInfo.unlock();
+
+        // **修改: GPS预处理 - 转换为局部坐标**
+        nav_msgs::Odometry gpsLocal = *gpsMsg;
+        if (local_coord_system_.initialized) {
+            // 提取原始LLA
+            Eigen::Vector3d lla(gpsMsg->pose.covariance[1],
+                               gpsMsg->pose.covariance[2],
+                               gpsMsg->pose.covariance[3]);
+            
+            // LLA -> UTM
+            Eigen::Vector3d utm;
+            geo_converter.Forward(lla[0], lla[1], lla[2], utm[0], utm[1], utm[2]);
+            
+            // UTM -> Local
+            // Eigen::Vector3d local = local_coord_system_.toLocal(utm);
+            Eigen::Vector3d local = utm;
+            
+            // 检查局部坐标是否合理
+            if (!local_coord_system_.isValid(local)) {
+                ROS_WARN("GPS local coordinate out of range: [%.2f, %.2f, %.2f]", 
+                         local.x(), local.y(), local.z());
+            }
+            
+            // **关键: 将局部坐标存入pose.pose.position**
+            gpsLocal.pose.pose.position.x = local.x();
+            gpsLocal.pose.pose.position.y = local.y();
+            gpsLocal.pose.pose.position.z = local.z();
+            
+            if (debugGps) {
+                ROS_INFO("GPS LLA: [%.8f, %.8f, %.2f]", lla[0], lla[1], lla[2]);
+                ROS_INFO("GPS UTM: [%.2f, %.2f, %.2f]", utm[0], utm[1], utm[2]);
+                ROS_INFO("GPS Local: [%.2f, %.2f, %.2f]", local.x(), local.y(), local.z());
+            }
         }
+        
+        mtxGpsInfo.lock();
+        gpsQueue.push_back(gpsLocal);  // **存储局部坐标的GPS**
+        mtxGpsInfo.unlock();
+
     }
 
     void pointAssociateToMap(PointType const *const pi, PointType *const po) {
@@ -534,7 +612,9 @@ public:
                 aligedGps = gpsQueue.front();
                 gpsQueue.pop_front();
                if (debugGps)
-                //    ROS_INFO("GPS time offset %f ",aligedGps.header.stamp.toSec() - timestamp);
+               {
+                   ROS_INFO("GPS time offset %f ",aligedGps.header.stamp.toSec() - timestamp);
+               }
                 mtxGpsInfo.unlock();
             }
         }
@@ -672,8 +752,12 @@ public:
             /** if you want to save the origin deskewed point cloud, but not only feature map*/
 //            *globalRawCloud += *transformPointCloud(laserCloudRawKeyFrames[i],
 //                                                    &cloudKeyPoses6D->points[i]);
-            cout << "\r" << std::flush << "Processing feature cloud " << i << " of "
-                 << cloudKeyPoses6D->size() << " ..." << std::endl;
+if (i % 500 == 0)
+{
+                cout << "\r" << std::flush << "Processing feature cloud " << i << " of "
+                    << cloudKeyPoses6D->size() << " ..." << std::endl;
+}
+
         }
         ROS_WARN("save map");
         std::cout << "global map size: " << globalCornerCloud->size()  << std::endl;
@@ -750,12 +834,12 @@ public:
         // search near key frames to visualize
         mtx.lock();
         kdtreeGlobalMap->setInputCloud(cloudKeyPoses3D);
-        ROS_WARN("radiusSearch candidates...");
+
         kdtreeGlobalMap->radiusSearch(
                 cloudKeyPoses3D->back(), globalMapVisualizationSearchRadius,
                 pointSearchIndGlobalMap, pointSearchSqDisGlobalMap, 0);
         mtx.unlock();
-        ROS_WARN("radiusSearch candidates...");
+
 
         for (int i = 0; i < (int) pointSearchIndGlobalMap.size(); ++i)
             globalMapKeyPoses->push_back(
@@ -773,10 +857,10 @@ public:
             if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
                 continue;
             }
-            ROS_INFO(" nearestKSearch  " );
+
             kdtreeGlobalMap->nearestKSearch(pt, 1, pointSearchIndGlobalMap,
                                             pointSearchSqDisGlobalMap);
-            ROS_INFO(" nearestKSearch  " );
+
             if (!pointSearchIndGlobalMap.empty()) {
                 pt.intensity =
                     cloudKeyPoses3D->points[pointSearchIndGlobalMap[0]].intensity;
@@ -859,7 +943,7 @@ public:
 
         if (std::fabs(copy_cloudKeyPoses6D->points[loopKeyCur].time - copy_cloudKeyPoses6D->points[loopKeyPre].time) < 100)
         {
-            ROS_WARN("==========toooooooooo  time close return ========================");
+            // ROS_WARN("==========toooooooooo  time close return ========================");
             return;
         }
 
@@ -879,14 +963,21 @@ public:
             double distance = sqrt(dx*dx + dy*dy + dz*dz);
             
             ROS_WARN("=== LOOP CLOSURE DISTANCE INFO ===");
-            ROS_WARN("Current Key [%d]: Position (%.3f, %.3f, %.3f), Time: %.3f", 
-                     loopKeyCur, curPose.x, curPose.y, curPose.z, curPose.time);
-            ROS_WARN("Previous Key [%d]: Position (%.3f, %.3f, %.3f), Time: %.3f", 
-                     loopKeyPre, prePose.x, prePose.y, prePose.z, prePose.time);
+            ROS_WARN("Current Key [%d]: Position (%.3f, %.3f, %.3f, %.3f), Time: %.3f", 
+                     loopKeyCur, curPose.x, curPose.y, curPose.z, curPose.yaw, curPose.time);
+            ROS_WARN("Previous Key [%d]: Position (%.3f, %.3f, %.3f, %.3f), Time: %.3f", 
+                     loopKeyPre, prePose.x, prePose.y, prePose.z, prePose.yaw, prePose.time);
             ROS_WARN("Distance between loop keys: %.3f meters", distance);
             ROS_WARN("Time difference: %.3f seconds", abs(curPose.time - prePose.time));
             ROS_WARN("Key index difference: %d", abs(loopKeyCur - loopKeyPre));
             ROS_WARN("=================================");
+
+            if ( std::fabs(curPose.yaw - prePose.yaw) > 10*M_PI/180.0    )
+            {
+                ROS_WARN("========== yaw difference toooooooooo big return ========================");
+                return;
+            }
+
             if(distance < 0.5 || distance > 10.0) {
                 ROS_WARN("========== distance toooooooooo close return ========================");
                 return;
@@ -942,7 +1033,7 @@ public:
                 return;
             }
         }
-        // ROS_WARN("doooooooooooooo icp for  looooooooooop"    );
+        ROS_WARN("doooooooooooooo icp for  looooooooooop"    );
 
         // Additional safety checks before ICP
         if (cureKeyframeCloud->empty() || prevKeyframeCloud->empty()) {
@@ -1010,7 +1101,7 @@ public:
         // Set K adaptively but keep within a robust range
         int k_rand = std::min<int>(64, std::max<int>(10, (int)std::sqrt((double)std::min(src_clean->size(), tgt_clean->size()))));
         gicp.setCorrespondenceRandomness(k_rand);
-        gicp.setMaxCorrespondenceDistance(1.5);
+        gicp.setMaxCorrespondenceDistance(0.5);
         gicp.setMaximumIterations(128);
         gicp.setTransformationEpsilon(1e-3);
         gicp.setRotationEpsilon(1e-3);
@@ -1018,6 +1109,7 @@ public:
         gicp.setRegularizationMethod(nano_gicp::RegularizationMethod::PLANE);
 
         std::cout << "doooooooooooooo icp for  set param ok" << std::endl;
+        static int cnt = 0;
         try
         {
             std::cout << "doooooooooooooo icp for  set data" << std::endl;
@@ -1027,14 +1119,16 @@ public:
             gicp.calculateTargetCovariances();
             std::cout << "doooooooooooooo icp for  set data ok" << std::endl;
 
-            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/prevKeyframeCloud.pcd", *tgt_clean);
-            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/cureKeyframeCloud.pcd", *src_clean);
+            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/" + std::to_string(cnt) + "prevKeyframeCloud.pcd", *tgt_clean);
+            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/" + std::to_string(cnt) + "cureKeyframeCloud.pcd", *src_clean);
             pcl::PointCloud<pcl::PointXYZI> aligned;
             // Use a proper initial guess to stabilize convergence
             std::cout << "doooooooooooooo icp align ss" << std::endl;
-            gicp.align(aligned, initial_guess.cast<float>());
+            // gicp.align(aligned, initial_guess.cast<float>());
+            gicp.align(aligned);
             std::cout << "doooooooooooooo icp align ee" << std::endl;
-            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/unused_result.pcd", aligned);
+            pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/" + std::to_string(cnt) + "unused_result.pcd", aligned);
+            cnt++;
             
             bool converged = gicp.hasConverged();
             float score = 999.0f;
@@ -1042,7 +1136,6 @@ public:
             Eigen::Matrix4d T_last_to_cur_refined = gicp.getFinalTransformation().cast<double>();
             std::cout << "Refined Transformation Matrix: \n" << T_last_to_cur_refined << std::endl;
             ROS_WARN("Do_gicp: GICP converged: %d, score: %f", converged, score);
-            if (converged) return;
             ROS_WARN("doooooooooooooo icp for  eeeeeee"    );
         }
         catch (const std::exception &e)
@@ -1051,10 +1144,11 @@ public:
             return;
         }
 
+        ROS_WARN("looooooooooop icp.getFitnessScore: %f", gicp.getFitnessScore());
         if (gicp.hasConverged() == false ||
             gicp.getFitnessScore() > historyKeyframeFitnessScore)
             return;
-        ROS_WARN("looooooooooop icp.getFitnessScore: %f", gicp.getFitnessScore());
+            
 
         // publish corrected cloud
         if (pubIcpKeyFrames.getNumSubscribers() != 0) {
@@ -1170,7 +1264,7 @@ public:
             // ROS_WARN("Distance check passed: %f >= 12", distance);
         }
 
-        ROS_WARN("------Loop closure detected successfully: loopKeyCur=%d, loopKeyPre=%d", loopKeyCur, loopKeyPre);
+        // ROS_WARN("------Loop closure detected successfully: loopKeyCur=%d, loopKeyPre=%d", loopKeyCur, loopKeyPre);
         *latestID = loopKeyCur;
         *closestID = loopKeyPre;
 
@@ -1385,48 +1479,90 @@ public:
                  * */
                 nav_msgs::Odometry alignedGPS;
                 if (syncGPS(gpsQueue, alignedGPS, timeLaserInfoCur, 1.0 / gpsFrequence)) {
-                    /** we store the origin wgs84 coordinate points in covariance[1]-[3] */
-                    originLLA.setIdentity();
-                    originLLA = Eigen::Vector3d(alignedGPS.pose.covariance[1],
-                                                alignedGPS.pose.covariance[2],
-                                                alignedGPS.pose.covariance[3]);
-                    /** set your map origin points */
-                    geo_converter.Reset(originLLA[0], originLLA[1], originLLA[2]);
-                    // WGS84->ENU, must be (0,0,0)
-                    Eigen::Vector3d enu;
-                    geo_converter.Forward(originLLA[0], originLLA[1], originLLA[2], enu[0], enu[1], enu[2]);
-                   
-                    static  Eigen::Vector3d initialGNSS(3.76356e+06, 4.408e+06, -9.01583e+06);
-                    enu = enu - initialGNSS;
+                    // **新增: 初始化局部坐标系**
+                    if (!local_coord_system_.initialized) {
+                        // 1. 保存LLA原点
+                        local_coord_system_.lla_origin = Eigen::Vector3d(
+                            alignedGPS.pose.covariance[1],
+                            alignedGPS.pose.covariance[2],
+                            alignedGPS.pose.covariance[3]
+                        );
+                        
+                        // 2. 设置geo_converter到这个原点
+                        geo_converter.Reset(local_coord_system_.lla_origin[0],
+                                          local_coord_system_.lla_origin[1],
+                                          local_coord_system_.lla_origin[2]);
+                        
+                        // 3. 计算UTM原点
+                        Eigen::Vector3d utm_origin;
+                        GeographicLib::LocalCartesian geo_converter;
+                        geo_converter.Forward(local_coord_system_.lla_origin[0],
+                                            local_coord_system_.lla_origin[1],
+                                            local_coord_system_.lla_origin[2],
+                                            utm_origin[0], utm_origin[1], utm_origin[2]);
 
-                    if (debugGps) {
-                        double roll, pitch, yaw;
-                        tf::Matrix3x3(tf::Quaternion(alignedGPS.pose.pose.orientation.x,
-                                                     alignedGPS.pose.pose.orientation.y,
-                                                     alignedGPS.pose.pose.orientation.z,
-                                                     alignedGPS.pose.pose.orientation.w))
-                                .getRPY(roll, pitch, yaw);
-                        std::cout << "initial gps yaw: " << yaw << std::endl;
-                        std::cout << "GPS Position: " << enu.transpose() << std::endl;
-                        std::cout << "GPS LLA: " << originLLA.transpose() << std::endl;
+                        local_coord_system_.utm_origin = utm_origin;
+                        local_coord_system_.timestamp_origin = timeLaserInfoCur;
+                        local_coord_system_.initialized = true;
+ 
+                        // 同时保存到originLLA (兼容原有代码)
+                        originLLA = local_coord_system_.lla_origin;
+                        
+                        ROS_INFO("=== Local Coordinate System Initialized ===");
+                        ROS_INFO("Origin LLA: [%.8f, %.8f, %.2f]", 
+                                local_coord_system_.lla_origin[0],
+                                local_coord_system_.lla_origin[1],
+                                local_coord_system_.lla_origin[2]);
+                        ROS_INFO("Origin UTM: [%.2f, %.2f, %.2f]",
+                                local_coord_system_.utm_origin[0],
+                                local_coord_system_.utm_origin[1],
+                                local_coord_system_.utm_origin[2]);
+                        ROS_INFO("==========================================");
+
+                        // **新增: 保存UTM原点到文件**
+                        std::string utm_origin_file = savePCDDirectory + "/utm_origin.txt";
+                        std::ofstream utm_file(utm_origin_file);
+                        if (utm_file.is_open()) {
+                            utm_file << "# Timestamp: " << std::fixed << std::setprecision(6) << local_coord_system_.timestamp_origin << std::endl;
+                            utm_file << "# LLA Origin: " << std::fixed << std::setprecision(8) 
+                                     << local_coord_system_.lla_origin[0] << " " 
+                                     << local_coord_system_.lla_origin[1] << " " 
+                                     << std::setprecision(2) << local_coord_system_.lla_origin[2] << std::endl;
+
+                            utm_file << "# UTM Origin Coordinates" << std::endl;
+                            utm_file << "# Format: X Y Z (meters)" << std::endl;
+                            utm_file << std::fixed << std::setprecision(6) 
+                                     << local_coord_system_.utm_origin[0] << " " << local_coord_system_.utm_origin[1] << " " << local_coord_system_.utm_origin[2] << std::endl;
+                            utm_file.close();
+                            ROS_INFO("Successfully saved UTM origin to: %s", utm_origin_file.c_str());
+                        } else {
+                            ROS_WARN("Failed to open UTM origin file: %s", utm_origin_file.c_str());
+                        }
+
                     }
 
-                    /** add the first factor, we need this origin GPS point for prior map based localization,
-                     * but we need to optimize its value by pose graph if the origin gps RTK status is not fixed.*/
+                    // **修改: 现在alignedGPS.pose.pose.position已经是局部坐标**
                     PointType gnssPoint;
-                    gnssPoint.x = enu[0],
-                    gnssPoint.y = enu[1],
-                    gnssPoint.z = enu[2];
+                    gnssPoint.x = alignedGPS.pose.pose.position.x;  // 局部坐标
+                    gnssPoint.y = alignedGPS.pose.pose.position.y;
+                    gnssPoint.z = alignedGPS.pose.pose.position.z;
+                    
+                    ROS_INFO("NOTE ............................ First GPS local position: [%.2f, %.2f, %.2f]",
+                            gnssPoint.x, gnssPoint.y, gnssPoint.z);
+                    
+                    // 验证首个GPS点应该接近(0,0,0)
+                    if (std::abs(gnssPoint.x) > 10.0 || std::abs(gnssPoint.y) > 10.0) {
+                        ROS_WARN("First GPS local position not close to origin! Check coordinate transformation.");
+                    }
+                    
                     float noise_x = alignedGPS.pose.covariance[0];
                     float noise_y = alignedGPS.pose.covariance[7];
                     float noise_z = alignedGPS.pose.covariance[14];
-
-                    /** if we get reliable origin point, we adjust the weight of this gps factor to fix the map origin */
-                    //if (!updateOrigin) {
+                    
                     noise_x *= 1e-4;
                     noise_y *= 1e-4;
                     noise_z *= 1e-4;
-                    // }
+                    
                     gtsam::Vector Vector3(3);
                     Vector3 << noise_x, noise_y, noise_z;
                     noiseModel::Diagonal::shared_ptr gps_noise =
@@ -1435,7 +1571,7 @@ public:
                                                 gps_noise);
                     keyframeGPSfactor.push_back(gps_factor);
                     cloudKeyGPSPoses3D->points.push_back(gnssPoint);
-
+                    
                     transformTobeMapped[0] = cloudInfo.imuRollInit;
                     transformTobeMapped[1] = cloudInfo.imuPitchInit;
                     transformTobeMapped[2] = cloudInfo.imuYawInit;
@@ -1444,9 +1580,10 @@ public:
                             0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit,
                             cloudInfo.imuYawInit);
                     systemInitialized = true;
-                    ROS_WARN("GPS init success");
+                    ROS_WARN("GPS init success with local coordinates");
                 }
             } else {
+                // ...existing non-GPS initialization...
                 transformTobeMapped[0] = cloudInfo.imuRollInit;
                 transformTobeMapped[1] = cloudInfo.imuPitchInit;
                 transformTobeMapped[2] = cloudInfo.imuYawInit;
@@ -2160,47 +2297,37 @@ public:
     }
 
     void addGPSFactor() {
+
         if (gpsQueue.empty()) return;
 
         // wait for system initialized and settles down
         if (cloudKeyPoses3D->points.empty() || cloudKeyPoses3D->points.size() == 1)
             return;
-        // ROS_WARN("addGPSFactor ok");
-        //    else {
-        //      if (pointDistance(cloudKeyPoses3D->front(), cloudKeyPoses3D->back())
-        //      < 5.0)
-        //        return;
-        //    }
-
-        // pose covariance small, no need to correct
-        //        if (poseCovariance(3, 3) < poseCovThreshold && poseCovariance(4,
-        //        4) < poseCovThreshold)
-        //            return;
+ 
 
         // last gps position
         static PointType lastGPSPoint;
         nav_msgs::Odometry thisGPS;
         if (syncGPS(gpsQueue, thisGPS, timeLaserInfoCur, 1.0 / gpsFrequence)) {
             // GPS too noisy, skip
-            float noise_x = 0.03 ; //thisGPS.pose.covariance[0];
-            float noise_y = 0.03 ; //thisGPS.pose.covariance[7];
-            float noise_z = 0.03 ; //thisGPS.pose.covariance[14];
+            float noise_x = thisGPS.pose.covariance[0];
+            float noise_y = thisGPS.pose.covariance[7];
+            float noise_z = thisGPS.pose.covariance[14];
+            // std::cout << "gpsCovThreshold: " << gpsCovThreshold <<  std::endl;
 
             // make sure the gps data is stable encough
             if (abs(noise_x) > gpsCovThreshold || abs(noise_y) > gpsCovThreshold)
                 return;
 
-//            float gps_x = thisGPS.pose.pose.position.x;
-//            float gps_y = thisGPS.pose.pose.position.y;
-//            float gps_z = thisGPS.pose.pose.position.z;
-            double gps_x = 0.0, gps_y = 0.0, gps_z = 0.0;
-            Eigen::Vector3d LLA(thisGPS.pose.covariance[1], thisGPS.pose.covariance[2], thisGPS.pose.covariance[3]);
-            std::cout << "2287 LLA: " << LLA.transpose() <<  std::endl;
-            geo_converter.Forward(LLA[0], LLA[1], LLA[2], gps_x, gps_y, gps_z);
-            static Eigen::Vector3d temp_initialGNSS(3.76356e+06, 4.408e+06, -9.01583e+06);
-            gps_x -= temp_initialGNSS[0];
-            gps_y -= temp_initialGNSS[1];
-            gps_z -= temp_initialGNSS[2];
+            float gps_x = thisGPS.pose.pose.position.x;
+            float gps_y = thisGPS.pose.pose.position.y;
+            float gps_z = thisGPS.pose.pose.position.z;
+
+            // 验证局部坐标范围
+            if (!local_coord_system_.isValid(Eigen::Vector3d(gps_x, gps_y, gps_z))) {
+                ROS_WARN("GPS local coordinate out of valid range: [%.2f, %.2f, %.2f]",
+                         gps_x, gps_y, gps_z);
+            }
 
             if (!useGpsElevation) {
                 gps_z = transformTobeMapped[5];
@@ -2224,14 +2351,11 @@ public:
                 ROS_INFO("curr gps cov: %f, %f , %f", thisGPS.pose.covariance[0],
                          thisGPS.pose.covariance[7], thisGPS.pose.covariance[14]);
             }
-            std::cout << "gps_x: " << gps_x <<  std::endl;
-            std::cout << "gps_y: " << gps_y <<  std::endl;
-            std::cout << "gps_z: " << gps_z <<  std::endl;
+            
             // 确保噪声不会太小，避免系统过约束
-            float min_noise = 0.001f;  // 最小噪声阈值
+            float min_noise = 0.01f;  // 最小噪声阈值
             gtsam::Vector Vector3(3);
             Vector3 << max(noise_x, min_noise), max(noise_y, min_noise), max(noise_z, min_noise);
-            std::cout << "2308 GPS noise: " << Vector3.transpose() <<  std::endl;
             noiseModel::Diagonal::shared_ptr gps_noise =
                     noiseModel::Diagonal::Variances(Vector3);
             gtsam::GPSFactor gps_factor(cloudKeyPoses3D->size(),
@@ -2284,7 +2408,7 @@ public:
                         cloudKeyGPSPoses3D->size() - 1;
             }
             aLoopIsClosed = true;
-            ROS_INFO("------------------------- aLoopIsClosed = true");
+            // ROS_INFO("------------------------- aLoopIsClosed = true");
         }
     }
 
@@ -2442,7 +2566,7 @@ public:
 
             // update key poses
             int numPoses = isamCurrentEstimate.size();
-            ROS_INFO("------------------------- correctPoses %d", numPoses);
+            ROS_INFO(" correctPoses %d ", numPoses);
             for (int i = 0; i < numPoses; ++i) {
                 cloudKeyPoses3D->points[i].x =
                         isamCurrentEstimate.at<Pose3>(i).translation().x();
@@ -2465,7 +2589,6 @@ public:
             }
 
             aLoopIsClosed = false;
-            ROS_INFO("-------aLoopIsClosed = false------------------ ");
         }
     }
 

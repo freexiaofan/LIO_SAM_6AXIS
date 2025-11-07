@@ -218,6 +218,10 @@ public:
         nh.param<std::string>("configDirectory", configDirectory, "map");
 
         std::cout << "SAVE DIR:" << saveDirectory << std::endl;
+        std::cout << "useGPS:" << useGPS << std::endl;
+        std::cout << "useGpsElevation:" << useGpsElevation << std::endl;
+        std::cout << "useImuHeadingInitialization:" << useImuHeadingInitialization << std::endl;
+        std::cout << "gpsCovThreshold:" << gpsCovThreshold << std::endl;
 
         std::string sensorStr;
         nh.param<std::string>("lio_sam_6axis/sensor", sensorStr, "ouster");

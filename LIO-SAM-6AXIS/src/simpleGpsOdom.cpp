@@ -20,29 +20,97 @@ public:
         left_odom_pub = nh.advertise<nav_msgs::Odometry>("/gps_odom", 100, false);
         init_origin_pub = nh.advertise<nav_msgs::Odometry>("/init_odom", 10000, false);
         left_path_pub = nh.advertise<nav_msgs::Path>("/gps_path", 100);
+        
+        // **初始化所有变量**
+        prev_yaw = 0.0;
+        valid_yaw_count = 0;
+        last_update_time = 0.0;
+        prev_pose_left.setZero();
+        prev_velocity.setZero();
+        valid_pose_count = 0;
+        last_valid_time = 0.0;
+        position_history.resize(3);
     }
 
 private:
+    // 航向角平滑相关变量
+    double prev_yaw;
+    int valid_yaw_count;
+    double last_update_time;
+    std::deque<double> yaw_history;
+    
+    // **运动约束相关变量**
+    Eigen::Vector3d prev_velocity;           // 上一次的速度
+    std::deque<Eigen::Vector3d> position_history;  // 位置历史记录
+    std::deque<double> time_history;         // 时间历史记录
+    int valid_pose_count;                    // 有效位姿计数
+    double last_valid_time;                  // 最后一次有效时间
+    Eigen::Vector3d last_valid_position;     // 最后一次有效位置
+    
+    // **运动约束阈值**
+    static constexpr double MIN_DISTANCE = 0.5;
+    static constexpr double MAX_YAW_CHANGE = M_PI / 8;          // 22.5度
+    static constexpr double YAW_FILTER_ALPHA = 0.3;
+    static constexpr double MAX_SPEED = 10.0;                   // 30 m/s 最大速度
+    static constexpr double MAX_ACCELERATION = 8.0;            // 8 m/s² 最大加速度
+    static constexpr double MAX_LATERAL_ACCELERATION = 5.0;    // 5 m/s² 最大横向加速度
+    static constexpr double MAX_YAW_RATE = M_PI / 4;          // 45度/秒 最大角速度
+    static constexpr double OUTLIER_DISTANCE_THRESHOLD = 10.0; // 10米异常距离阈值
+    static constexpr int HISTORY_SIZE = 5;                    // 历史记录大小
+
+    // **角度标准化函数**
+    double normalizeAngle(double angle) {
+        while (angle > M_PI) angle -= 2.0 * M_PI;
+        while (angle < -M_PI) angle += 2.0 * M_PI;
+        return angle;
+    }
+
+    double angleDifference(double a, double b) {
+        double diff = a - b;
+        return normalizeAngle(diff);
+    }
+
+    // **简化的运动一致性检查：基于相邻位置向量方向**
+    bool checkMotionConsistency( Eigen::Vector3d current_direction, 
+                                 Eigen::Vector3d prev_direction) {
+                                    
+        // **核心：相邻位移向量方向一致性检查**
+        auto v1 = current_direction.normalized();
+        auto v2 = prev_direction.normalized();
+
+        // 计算两个方向向量的夹角
+        double dot_product = v1.dot(v2);
+        double angle_diff = std::acos(dot_product);
+        
+        // **方向变化阈值：45度**
+        const double MAX_DIRECTION_CHANGE = M_PI / 4;  // 45度
+        ROS_WARN("  Angle difference: %.1f deg (max: %.1f deg)", 
+                     angle_diff * 180.0 / M_PI, MAX_DIRECTION_CHANGE * 180.0 / M_PI);
+        if (angle_diff > MAX_DIRECTION_CHANGE) {
+            return false;  // 方向变化过大，拒绝此位置
+        }
+        
+        return true;
+    }
+
     void GNSSCB(const sensor_msgs::NavSatFixConstPtr &msg) {
-        std::cout << "gps status: " <<  int(msg->status.status) << " " << msg->status.service << std::endl;
+        // std::cout << "gps status: " <<  int(msg->status.status) << " " << msg->status.service << std::endl;
         if (std::isnan(msg->latitude + msg->longitude + msg->altitude)) {
             return;
         }
-        if (int(msg->status.status) != 2)
-        {
+        if (int(msg->status.status) != 2) {
             std::cout << " NOT RTK FIX --------------- return: "   << std::endl;
             return;
         }
         
         Eigen::Vector3d lla(msg->latitude, msg->longitude, msg->altitude);
-        std::cout << "LLA: " << lla.transpose() << std::endl;
+        // std::cout << "LLA: " << lla.transpose() << std::endl;
+
         if (!initENU) {
-            ROS_INFO("Init Orgin GPS LLA  %f, %f, %f", msg->latitude, msg->longitude,
-                     msg->altitude);
+            ROS_INFO("Init Origin GPS LLA  %f, %f, %f", msg->latitude, msg->longitude, msg->altitude);
             geo_converter.Reset(lla[0], lla[1], lla[2]);
             initENU = true;
 
-            /** publish initial pose from GNSS ENU Frame*/
             nav_msgs::Odometry init_msg;
             init_msg.header.stamp = msg->header.stamp;
             init_msg.header.frame_id = odometryFrame;
@@ -55,35 +123,59 @@ private:
             init_msg.pose.covariance[14] = msg->position_covariance[8];
             init_msg.pose.pose.orientation = yaw_quat_left;
             init_origin_pub.publish(init_msg);
+            
+            // **初始化历史记录**
+            prev_pose_left.setZero();
+            position_history.clear();
+            time_history.clear();
             return;
         }
 
-        /** if you have some satellite info or rtk status info, put it here*/
         int status = int(msg->status.status);
         int satell_num = -1;
         double x, y, z;
-        // LLA->ENU, better accuacy than gpsTools especially for z value
         geo_converter.Forward(lla[0], lla[1], lla[2], x, y, z);
-        Eigen::Vector3d enu(x, y, z);
-        if (abs(enu.x()) > 10000 || abs(enu.x()) > 10000 || abs(enu.x()) > 10000) {
-            /** check your lla coordinate */
-            ROS_INFO("Error ogigin : %f, %f, %f", enu(0), enu(1), enu(2));
+        Eigen::Vector3d raw_enu(x, y, z);
+
+        // 距离太近则不更新 去除位置的微小跳动
+        static Eigen::Vector3d first_enu(x, y, z);
+        static Eigen::Vector3d direct_1 ;
+        static bool ok = false;
+
+        if (  !ok && (first_enu - raw_enu).norm() < 1.0 )
+        {
             return;
         }
 
-        bool orientationReady = false;
-        double yaw = 0.0;
-        double distance =
-                sqrt(pow(enu(1) - prev_pose_left(1), 2) + pow(enu(0) - prev_pose_left(0), 2));
-        if (distance > 0.1) {
-            // 返回值是此点与远点连线与x轴正方向的夹角
-            yaw = atan2(enu(1) - prev_pose_left(1), enu(0) - prev_pose_left(0));
-            yaw_quat_left = tf::createQuaternionMsgFromYaw(yaw);
-            prev_pose_left = enu;
-            orientationReady = true;
+        if (!ok)
+        {
+            direct_1 = raw_enu - first_enu;
+            first_enu = raw_enu;
+            ok = true;
+            return;
+        }
+        Eigen::Vector3d direct_2 = raw_enu - first_enu;
+
+        double v1_deg = std::atan2(direct_1(1), direct_1(0)) * 180.0 / M_PI;
+        double v2_deg = std::atan2(direct_2(1), direct_2(0)) * 180.0 / M_PI;
+            std::cout << " v1_deg: " << v1_deg << std::endl;
+            std::cout << " v2_deg: " << v2_deg << std::endl;
+
+        if (checkMotionConsistency(direct_1, direct_2))
+        {
+            first_enu = raw_enu;
+            direct_1 = direct_2;
+        }
+        else
+        {
+            std::cout << " GNSS ODOM rejected due to motion inconsistency. " << std::endl;
+            return;
         }
 
-        /** pub gps odometry*/
+        // 位置检查通过，直接使用原始GPS位置
+        Eigen::Vector3d enu = raw_enu;
+
+        // **发布消息**
         nav_msgs::Odometry odom_msg;
         odom_msg.header.stamp = msg->header.stamp;
         odom_msg.header.frame_id = odometryFrame;
@@ -100,13 +192,12 @@ private:
         odom_msg.pose.covariance[3] = lla[2];
         odom_msg.pose.covariance[4] = status;
         odom_msg.pose.covariance[5] = satell_num;
-        odom_msg.pose.covariance[6] = orientationReady;
+        
         odom_msg.pose.pose.orientation = yaw_quat_left;
+        
         left_odom_pub.publish(odom_msg);
 
-
-        /** just for gnss visualization */
-        // publish path
+        // 路径发布
         left_path.header.frame_id = odometryFrame;
         left_path.header.stamp = msg->header.stamp;
         geometry_msgs::PoseStamped pose;
@@ -114,11 +205,9 @@ private:
         pose.pose.position.x = enu(0);
         pose.pose.position.y = enu(1);
         pose.pose.position.z = enu(2);
-        pose.pose.orientation.x = yaw_quat_left.x;
-        pose.pose.orientation.y = yaw_quat_left.y;
-        pose.pose.orientation.z = yaw_quat_left.z;
-        pose.pose.orientation.w = yaw_quat_left.w;
+        pose.pose.orientation = yaw_quat_left;
         left_path.poses.push_back(pose);
+        
         left_path_pub.publish(left_path);
     }
 

@@ -412,6 +412,8 @@ void DataSaver::savePointCloudMap(pcl::PointCloud<PointT> &cloud_ptr) {
     try {
         pcl::io::savePCDFileASCII(save_directory + "globalmap_lidar_feature.pcd",
                                   cloud_ptr);
+        std::cout << "  save map : " << save_directory + "globalmap_lidar_feature.pcd" << std::endl;
+
     } catch (pcl::IOException) {
         std::cout << "  save map failed!!! " << cloud_ptr.size() << std::endl;
 
