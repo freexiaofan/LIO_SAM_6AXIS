@@ -83,7 +83,7 @@ private:
         double angle_diff = std::acos(dot_product);
         
         // **方向变化阈值：45度**
-        const double MAX_DIRECTION_CHANGE = M_PI / 4;  // 45度
+        const double MAX_DIRECTION_CHANGE = M_PI / 2;  // 45度
         ROS_WARN("  Angle difference: %.1f deg (max: %.1f deg)", 
                      angle_diff * 180.0 / M_PI, MAX_DIRECTION_CHANGE * 180.0 / M_PI);
         if (angle_diff > MAX_DIRECTION_CHANGE) {
@@ -142,7 +142,7 @@ private:
         static Eigen::Vector3d direct_1 ;
         static bool ok = false;
 
-        if (  !ok && (first_enu - raw_enu).norm() < 1.0 )
+        if (  !ok && (first_enu - raw_enu).norm() < 0.50 )
         {
             return;
         }

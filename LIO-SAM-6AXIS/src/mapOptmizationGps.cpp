@@ -472,6 +472,7 @@ public:
             geo_converter.Forward(lla[0], lla[1], lla[2], utm[0], utm[1], utm[2]);
             
             // UTM -> Local
+            // 不需要toLocal
             // Eigen::Vector3d local = local_coord_system_.toLocal(utm);
             Eigen::Vector3d local = utm;
             
@@ -874,6 +875,19 @@ if (i % 500 == 0)
                 globalMapVisualizationSearchRadius)
                 continue;
             int thisKeyInd = (int) globalMapKeyPosesDS->points[i].intensity;
+            
+            // 边界检查以防止索引越界
+            if (thisKeyInd < 0 || thisKeyInd >= cloudKeyPoses6D->points.size()) {
+                ROS_WARN("updateGlobalMapVisualization: thisKeyInd (%d) out of bounds for cloudKeyPoses6D (size: %lu)", 
+                         thisKeyInd, cloudKeyPoses6D->points.size());
+                continue;
+            }
+            if (thisKeyInd >= cornerCloudKeyFrames.size() || thisKeyInd >= surfCloudKeyFrames.size()) {
+                ROS_WARN("updateGlobalMapVisualization: thisKeyInd (%d) out of bounds for keyframe clouds (corner size: %lu, surf size: %lu)", 
+                         thisKeyInd, cornerCloudKeyFrames.size(), surfCloudKeyFrames.size());
+                continue;
+            }
+            
             *globalMapKeyFrames +=
                     *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],
                                          &cloudKeyPoses6D->points[thisKeyInd]);
@@ -941,15 +955,15 @@ if (i % 500 == 0)
         }
         // ROS_WARN("looooooooooop loopKeyCur, loopKeyPre %d %d %d ", loopKeyCur, loopKeyPre, historyKeyframeSearchNum);
 
-        if (std::fabs(copy_cloudKeyPoses6D->points[loopKeyCur].time - copy_cloudKeyPoses6D->points[loopKeyPre].time) < 100)
-        {
-            // ROS_WARN("==========toooooooooo  time close return ========================");
-            return;
-        }
-
         // Get positions and calculate distance between loop keys
         if (loopKeyCur >= 0 && loopKeyCur < copy_cloudKeyPoses6D->size() && 
             loopKeyPre >= 0 && loopKeyPre < copy_cloudKeyPoses6D->size()) {
+
+            if (std::fabs(copy_cloudKeyPoses6D->points[loopKeyCur].time - copy_cloudKeyPoses6D->points[loopKeyPre].time) < 100)
+            {
+                // ROS_WARN("==========toooooooooo  time close return ========================");
+                return;
+            }
             
             // Get current key position
             PointTypePose curPose = copy_cloudKeyPoses6D->points[loopKeyCur];
@@ -1099,8 +1113,8 @@ if (i % 500 == 0)
 
         nano_gicp::NanoGICP<pcl::PointXYZI, pcl::PointXYZI> gicp;
         // Set K adaptively but keep within a robust range
-        int k_rand = std::min<int>(64, std::max<int>(10, (int)std::sqrt((double)std::min(src_clean->size(), tgt_clean->size()))));
-        gicp.setCorrespondenceRandomness(k_rand);
+        // int k_rand = std::min<int>(64, std::max<int>(10, (int)std::sqrt((double)std::min(src_clean->size(), tgt_clean->size()))));
+        gicp.setCorrespondenceRandomness(128);
         gicp.setMaxCorrespondenceDistance(0.5);
         gicp.setMaximumIterations(128);
         gicp.setTransformationEpsilon(1e-3);
@@ -1404,7 +1418,21 @@ if (i % 500 == 0)
     }
 
     void visualGPSConstraint() {
+        std::lock_guard<std::mutex> lock(mtx);
+        
         if (gpsIndexContainer.empty()) return;
+        
+        // 再次检查指针是否有效
+        if (!copy_cloudKeyPoses6D || !cloudKeyGPSPoses3D) {
+            ROS_WARN("visualGPSConstraint: Null pointer detected");
+            return;
+        }
+        
+        // 检查点云大小是否为空
+        if (copy_cloudKeyPoses6D->points.empty() || cloudKeyGPSPoses3D->points.empty()) {
+            ROS_WARN("visualGPSConstraint: Empty point clouds");
+            return;
+        }
 
         visualization_msgs::MarkerArray markerArray;
         // gps nodes
@@ -1439,10 +1467,33 @@ if (i % 500 == 0)
         markerEdge.color.b = 0.1;
         markerEdge.color.a = 1;
 
-        for (auto it = gpsIndexContainer.begin(); it != gpsIndexContainer.end();
-             ++it) {
+        // 创建一个临时容器来存储有效的索引对
+        std::vector<std::pair<int, int>> validIndexPairs;
+        
+        for (auto it = gpsIndexContainer.begin(); it != gpsIndexContainer.end(); ++it) {
             int key_cur = it->first;
             int key_pre = it->second;
+
+            // 严格的边界检查
+            if (key_cur < 0 || key_cur >= static_cast<int>(copy_cloudKeyPoses6D->points.size())) {
+                ROS_WARN("visualGPSConstraint: key_cur (%d) out of bounds for copy_cloudKeyPoses6D (size: %lu)", 
+                         key_cur, copy_cloudKeyPoses6D->points.size());
+                continue;
+            }
+            if (key_pre < 0 || key_pre >= static_cast<int>(cloudKeyGPSPoses3D->points.size())) {
+                ROS_WARN("visualGPSConstraint: key_pre (%d) out of bounds for cloudKeyGPSPoses3D (size: %lu)", 
+                         key_pre, cloudKeyGPSPoses3D->points.size());
+                continue;
+            }
+            
+            // 添加到有效索引列表
+            validIndexPairs.push_back({key_cur, key_pre});
+        }
+        
+        // 遍历有效的索引对
+        for (const auto& indexPair : validIndexPairs) {
+            int key_cur = indexPair.first;
+            int key_pre = indexPair.second;
 
             geometry_msgs::Point p;
             p.x = copy_cloudKeyPoses6D->points[key_cur].x;
@@ -2589,6 +2640,32 @@ if (i % 500 == 0)
             }
 
             aLoopIsClosed = false;
+            
+            // 清理可能无效的GPS索引
+            cleanInvalidGPSIndices();
+        }
+    }
+    
+    void cleanInvalidGPSIndices() {
+        if (gpsIndexContainer.empty()) return;
+        
+        size_t maxValidIndex = cloudKeyPoses6D->points.size();
+        size_t maxValidGPSIndex = cloudKeyGPSPoses3D->points.size();
+        
+        auto it = gpsIndexContainer.begin();
+        while (it != gpsIndexContainer.end()) {
+            int key_cur = it->first;
+            int key_pre = it->second;
+            
+            // 删除超出边界的索引
+            if (key_cur < 0 || key_cur >= static_cast<int>(maxValidIndex) ||
+                key_pre < 0 || key_pre >= static_cast<int>(maxValidGPSIndex)) {
+                ROS_WARN("Removing invalid GPS index pair: (%d, %d), max_pose: %lu, max_gps: %lu", 
+                         key_cur, key_pre, maxValidIndex, maxValidGPSIndex);
+                it = gpsIndexContainer.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 

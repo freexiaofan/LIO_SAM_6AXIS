@@ -685,7 +685,7 @@ public:
             if (range < lidarMinRange || range > lidarMaxRange)
                 continue;
 
-            if (thisPoint.z > 50.0 || thisPoint.z < -2.20)
+            if (thisPoint.z > 50.0 || thisPoint.z < -5.0)
             {
                 continue;
             }
