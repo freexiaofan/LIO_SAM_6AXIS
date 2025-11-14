@@ -223,6 +223,65 @@ public:
         std::cout << "useImuHeadingInitialization:" << useImuHeadingInitialization << std::endl;
         std::cout << "gpsCovThreshold:" << gpsCovThreshold << std::endl;
 
+
+        std::cout << __FILE__ << " : " << __LINE__ << " savePCDDirectory: " << savePCDDirectory << std::endl;
+        std::cout << __FILE__ << " : " << __LINE__ << " GPSDISTANCE: " << GPSDISTANCE << std::endl;
+        
+        // Create directory if it doesn't exist
+        if (savePCD && !savePCDDirectory.empty()) {
+            // Check if directory exists
+            struct stat info;
+            if (stat(savePCDDirectory.c_str(), &info) != 0) {
+                // Directory doesn't exist, create it
+                std::cout << "Creating directory: " << savePCDDirectory << std::endl;
+                int result = system((std::string("mkdir -p ") + savePCDDirectory ).c_str());
+                if (result == 0) {
+                    std::cout << "Successfully created directory: " << savePCDDirectory << std::endl;
+                } else {
+                    std::cerr << "Failed to create directory: " << savePCDDirectory << std::endl;
+                }
+
+            } else if (info.st_mode & S_IFDIR) {
+                std::cout << "Directory already exists: " << savePCDDirectory << std::endl;
+            } else {
+                std::cerr << "Path exists but is not a directory: " << savePCDDirectory << std::endl;
+            }
+
+            std::string pcd_subdir = savePCDDirectory + "/pcd";
+            std::string loop_gicp_subdir = savePCDDirectory + "/loop_gicp";
+ 
+            if (stat(pcd_subdir.c_str(), &info) != 0) {
+                // Directory doesn't exist, create it
+                std::cout << "Creating directory: " << pcd_subdir << std::endl;
+                int result = system((std::string("mkdir -p ") + pcd_subdir).c_str());
+                if (result == 0) {
+                    std::cout << "Successfully created directory: " << pcd_subdir << std::endl;
+                } else {
+                    std::cerr << "Failed to create directory: " << pcd_subdir << std::endl;
+                }
+
+            } else if (info.st_mode & S_IFDIR) {
+                std::cout << "Directory already exists: " << pcd_subdir << std::endl;
+            } else {
+                std::cerr << "Path exists but is not a directory: " << pcd_subdir << std::endl;
+            }
+
+            if (stat(loop_gicp_subdir.c_str(), &info) != 0) {
+                // Directory doesn't exist, create it
+                std::cout << "Creating directory: " << loop_gicp_subdir << std::endl;
+                int result = system((std::string("mkdir -p ") + loop_gicp_subdir).c_str());
+                if (result == 0) {
+                    std::cout << "Successfully created directory: " << loop_gicp_subdir << std::endl;
+                } else {
+                    std::cerr << "Failed to create directory: " << loop_gicp_subdir << std::endl;
+                }
+            } else if (info.st_mode & S_IFDIR) {
+                std::cout << "Directory already exists: " << loop_gicp_subdir << std::endl;
+            } else {
+                std::cerr << "Path exists but is not a directory: " << loop_gicp_subdir << std::endl;
+            }
+        }
+
         std::string sensorStr;
         nh.param<std::string>("lio_sam_6axis/sensor", sensorStr, "ouster");
         if (sensorStr == "velodyne") {

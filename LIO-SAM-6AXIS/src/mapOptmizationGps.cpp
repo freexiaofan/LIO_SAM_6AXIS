@@ -306,7 +306,7 @@ public:
                                       rawMapFilterSize);  // giseop
 
         // set log dir
-        dataSaverPtr = std::make_unique<DataSaver>(saveDirectory, sequence);
+        dataSaverPtr = std::make_unique<DataSaver>(savePCDDirectory, sequence);
         // use imu frame when saving map
         dataSaverPtr->setExtrinc(true, t_body_sensor, q_body_sensor);
         dataSaverPtr->setConfigDir(configDirectory);
@@ -761,6 +761,41 @@ public:
         // dataSaverPtr->saveResultBag(keyframePosesOdom, keyframeCloudDeskewed, transform_vec);
         if (useGPS) dataSaverPtr->saveKMLTrajectory(lla_vec);
 
+        cout << "****************************************************" << endl;
+        cout << "Optimizing pose graph ..." << endl;
+        isam->update(gtSAMgraph, initialEstimate);
+        isam->update();
+        isam->update();
+        isam->update();
+        cout << "Optimizing pose graph end..." << endl;
+        cout << "savePCDDirectory: " << savePCDDirectory << endl;
+        // save trajectory in TUM format: timestamp tx ty tz qx qy qz qw
+        std::ofstream tumTrajectoryFile1(savePCDDirectory + "/geo_key_pose_opt.tum");
+        if (tumTrajectoryFile1.is_open())
+        {
+            cout << "Saving trajectory in TUM format using ISAM optimized poses..." << endl;
+            // Get current ISAM estimates
+            Values currentEstimate = isam->calculateEstimate();
+            for (int i = 0; i < (int)cloudKeyPoses6D->size(); i++)
+            {
+                // Get timestamp from original pose
+                double timestamp = cloudKeyPoses6D->points[i].time;
+                // Get optimized pose from ISAM
+                Pose3 optimizedPose = currentEstimate.at<Pose3>(i);
+                Vector3 translation = optimizedPose.translation();
+                gtsam::Quaternion rotation = optimizedPose.rotation().toQuaternion();
+                tumTrajectoryFile1 << std::fixed << std::setprecision(3) << timestamp << " "
+                                   << std::setprecision(6) << translation.x() << " " << translation.y() << " " << translation.z() << " "
+                                   << rotation.x() << " " << rotation.y() << " " << rotation.z() << " " << rotation.w() << std::endl;
+            }
+            tumTrajectoryFile1.close();
+            cout << "TUM trajectory saved using ISAM optimized poses to: " << savePCDDirectory << "geo_key_pose_opt.tum" << endl;
+        }
+        else
+        {
+            cout << "ERROR: Could not open TUM trajectory file for writing!" << endl;
+        }
+
         /** always remember do not call this service if your databag do not play over!!!!!!!!*/
         mtxGraph.lock();
         dataSaverPtr->saveGraphGtsam(gtSAMgraph, isam, isamCurrentEstimate);
@@ -806,7 +841,7 @@ public:
                      << cloudKeyPoses6D->size() << " ..." << std::endl;
             }
         }
-        ROS_WARN("save map");
+
         std::cout << "global map size: " << globalCornerCloud->size()  << std::endl;
         std::cout << "globalMapLeafSize: " << globalMapLeafSize  << std::endl;
 
@@ -846,7 +881,7 @@ public:
 //         laserCloudRawKeyFrames);
 
         cout << "****************************************************" << endl;
-        cout << "Saving map to pcd files completed: " << endl;
+        ROS_WARN("Saving map to pcd files completed");
 
         return true;
     }
@@ -1179,7 +1214,7 @@ public:
             gicp.calculateTargetCovariances();
             std::cout << "doooooooooooooo icp for  set data ok" << std::endl;
 
-            system("mkdir -p " + saveDirectory + "/loop_icp");
+
             pcl::PointCloud<pcl::PointXYZI> aligned;
             // Use a proper initial guess to stabilize convergence
             std::cout << "doooooooooooooo icp align ss" << std::endl;
@@ -1190,9 +1225,9 @@ public:
             bool converged = gicp.hasConverged();
             float score = 999.0f;
             score = gicp.getFitnessScore();
-            pcl::io::savePCDFileBinary(saveDirectory + "/loop_icp/" + std::to_string(cnt) + "_prevKeyframeCloud.pcd", *tgt_clean);
-            pcl::io::savePCDFileBinary(saveDirectory + "/loop_icp/" + std::to_string(cnt) + "_unused_result.pcd", aligned);
-            pcl::io::savePCDFileBinary(saveDirectory + "/loop_icp/" + std::to_string(cnt) + "_cureKeyframeCloud.pcd_" + std::to_string(score), *src_clean);
+            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_prevKeyframeCloud.pcd", *tgt_clean);
+            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_unused_result.pcd", aligned);
+            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_cureKeyframeCloud.pcd_" + std::to_string(score), *src_clean);
             cnt++;
 
             Eigen::Matrix4d T_last_to_cur_refined = gicp.getFinalTransformation().cast<double>();
@@ -2308,7 +2343,7 @@ public:
             sqrt(x * x + y * y + z * z) < surroundingkeyframeAddingDistThreshold)
             return false;
 
-        std::cout << "1842 distance gap: " << sqrt(x * x + y * y) << std::endl;
+        std::cout << "1842 distance move: " << sqrt(x * x + y * y) << std::endl;
         keyframeDistances.push_back(sqrt(x * x + y * y));
 
         return true;
@@ -2472,7 +2507,7 @@ public:
     }
 
     void saveKeyFramesAndFactor() {
-        // if (saveFrame() == false) return;
+        if (saveFrame() == false) return;
 
         // odom factor
         addOdomFactor();
@@ -2528,8 +2563,7 @@ public:
         Pose3 latestEstimate;
 
         isamCurrentEstimate = isam->calculateEstimate();
-        latestEstimate =
-                isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size() - 1);
+        latestEstimate = isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size() - 1);
         // cout << "****************************************************" << endl;
         // isamCurrentEstimate.print("Current estimate: ");
 
@@ -2583,6 +2617,16 @@ public:
 //        laserCloudRawKeyFrames.push_back(thislaserCloudRawKeyFrame);
         keyframeCloudDeskewed.push_back(cloudInfo.cloud_deskewed);
         keyframeTimes.push_back(timeLaserInfoStamp.toSec());
+
+
+        // save keyframe cloud to pcd by ln
+        std::stringstream filename;
+        filename << savePCDDirectory + "pcd/" << std::fixed << std::setprecision(3) << timeLaserInfoCur << ".pcd";
+        ROS_WARN("Saved full cloud to: %s with %d points", filename.str().c_str(), thislaserCloudRawKeyFrame->size());
+        thislaserCloudRawKeyFrame->height = 1;
+        thislaserCloudRawKeyFrame->width = thislaserCloudRawKeyFrame->points.size();
+        pcl::io::savePCDFileASCII(filename.str(), *thislaserCloudRawKeyFrame);
+        thislaserCloudRawKeyFrame->clear();
 
         // save keyframe pose odom
         //        nav_msgs::Odometry updatesOdometryROS;
