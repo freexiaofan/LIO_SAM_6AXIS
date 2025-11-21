@@ -256,6 +256,34 @@ class FeatureExtraction : public ParamServer {
                                           cloudHeader.stamp, lidarFrame);
     cloudInfo.cloud_surface = publishCloud(pubSurfacePoints, surfaceCloud,
                                            cloudHeader.stamp, lidarFrame);
+    
+    // Save corner and surface clouds to PCD files
+    double timeLaserInfoCur = cloudHeader.stamp.toSec();
+    try {
+        // Save corner cloud
+        std::stringstream cornerFilename;
+        cornerFilename << savePCDDirectory + "pcd/" << std::fixed << std::setprecision(3) << timeLaserInfoCur << "_corner.pcd";
+        if (!cornerCloud->empty()) {
+            cornerCloud->height = 1;
+            cornerCloud->width = cornerCloud->points.size();
+            // pcl::io::savePCDFileASCII(cornerFilename.str(), *cornerCloud);
+            ROS_INFO("Saved corner cloud to: %s with %d points", cornerFilename.str().c_str(), cornerCloud->size());
+        }
+        
+        // Save surface cloud
+        std::stringstream surfFilename;
+        surfFilename << savePCDDirectory + "pcd/" << std::fixed << std::setprecision(3) << timeLaserInfoCur << "_surf.pcd";
+        if (!surfaceCloud->empty()) {
+            surfaceCloud->height = 1;
+            surfaceCloud->width = surfaceCloud->points.size();
+            // pcl::io::savePCDFileASCII(surfFilename.str(), *surfaceCloud);
+            ROS_INFO("Saved surface cloud to: %s with %d points", surfFilename.str().c_str(), surfaceCloud->size());
+        }
+    }
+    catch (...) {
+        ROS_ERROR("Failed to save corner or surface cloud");
+    }
+    
     // publish to mapOptimization
     pubLaserCloudInfo.publish(cloudInfo);
   }

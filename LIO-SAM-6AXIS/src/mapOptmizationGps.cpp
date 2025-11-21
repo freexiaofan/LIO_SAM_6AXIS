@@ -679,6 +679,8 @@ public:
             ROS_INFO("NO ENCOUGH POSE!");
             return false;
         }
+        cout << "start save map" << endl;
+        cout << __FILE__ << ":" << __LINE__ << endl;
 
         Eigen::Vector3d optimized_lla;
         if (useGPS) {
@@ -1070,10 +1072,10 @@ public:
             if ( std::fabs(curPose.yaw - prePose.yaw) > 10*M_PI/180.0    )
             {
                 ROS_WARN("========== yaw difference toooooooooo big return ========================");
-                return;
+                // return;
             }
 
-            if(distance < 0.5 || distance > 10.0) {
+            if( distance > 10.0 ) {
                 ROS_WARN("========== distance toooooooooo close return ========================");
                 return;
             }
@@ -1093,9 +1095,14 @@ public:
                 loopFindNearKeyframes(cureKeyframeCloud, loopKeyCur, 0);
                 
                 // ROS_WARN("Extracting previous keyframe cloud...");
-                loopFindNearKeyframes(prevKeyframeCloud, loopKeyPre,
-                                      historyKeyframeSearchNum);
+                // loopFindNearKeyframes(prevKeyframeCloud, loopKeyPre,
+                //                       0);
+                                    //   historyKeyframeSearchNum);
                 
+                                    // prevKeyframeCloud  = laserCloudSurfFromMapDS;
+                pcl::copyPointCloud(*laserCloudSurfFromMapDS, *prevKeyframeCloud);
+                pcl::io::savePCDFileBinary("/home/tyjt/Desktop/ros_ws/_prevKeyframeCloud.pcd" , *prevKeyframeCloud);
+
                 // ROS_WARN("Keyframe extraction completed - cureKeyframe: %ld, prevKeyframe: %ld", 
                 //          cureKeyframeCloud->size(), prevKeyframeCloud->size());
 
@@ -1173,29 +1180,29 @@ public:
 
         // ICP Settings
         // Prepare cleaned copies to avoid NaNs/Infs crashing KD-tree/covariance
-        pcl::PointCloud<pcl::PointXYZI>::Ptr src_clean(new pcl::PointCloud<pcl::PointXYZI>);
-        pcl::PointCloud<pcl::PointXYZI>::Ptr tgt_clean(new pcl::PointCloud<pcl::PointXYZI>);
-        std::vector<int> idx;
-        pcl::removeNaNFromPointCloud(*cureKeyframeCloud, *src_clean, idx);
-        pcl::removeNaNFromPointCloud(*prevKeyframeCloud, *tgt_clean, idx);
-        // Filter out non-finite points (just in case)
-        auto isFinite = [](const pcl::PointXYZI &p){ return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
-        if (src_clean->size() != cureKeyframeCloud->size()) ROS_WARN("GICP: removed NaNs from source: %zu -> %zu", cureKeyframeCloud->size(), src_clean->size());
-        if (tgt_clean->size() != prevKeyframeCloud->size()) ROS_WARN("GICP: removed NaNs from target: %zu -> %zu", prevKeyframeCloud->size(), tgt_clean->size());
-        // Optional: cap cloud sizes to avoid huge memory/covariance build cost
-        const size_t max_points = 100000; // safety cap
-        if (src_clean->size() > max_points) src_clean->resize(max_points);
-        if (tgt_clean->size() > max_points) tgt_clean->resize(max_points);
+        // pcl::PointCloud<pcl::PointXYZI>::Ptr src_clean(new pcl::PointCloud<pcl::PointXYZI>);
+        // pcl::PointCloud<pcl::PointXYZI>::Ptr tgt_clean(new pcl::PointCloud<pcl::PointXYZI>);
+        // std::vector<int> idx;
+        // pcl::removeNaNFromPointCloud(*cureKeyframeCloud, *src_clean, idx);
+        // pcl::removeNaNFromPointCloud(*prevKeyframeCloud, *tgt_clean, idx);
+        // // Filter out non-finite points (just in case)
+        // auto isFinite = [](const pcl::PointXYZI &p){ return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
+        // if (src_clean->size() != cureKeyframeCloud->size()) ROS_WARN("GICP: removed NaNs from source: %zu -> %zu", cureKeyframeCloud->size(), src_clean->size());
+        // if (tgt_clean->size() != prevKeyframeCloud->size()) ROS_WARN("GICP: removed NaNs from target: %zu -> %zu", prevKeyframeCloud->size(), tgt_clean->size());
+        // // Optional: cap cloud sizes to avoid huge memory/covariance build cost
+        // const size_t max_points = 100000; // safety cap
+        // if (src_clean->size() > max_points) src_clean->resize(max_points);
+        // if (tgt_clean->size() > max_points) tgt_clean->resize(max_points);
 
-        if (src_clean->size() < 50 || tgt_clean->size() < 50) {
-            ROS_WARN("GICP: too few points after cleaning (src=%zu, tgt=%zu)", src_clean->size(), tgt_clean->size());
-            return;
-        }
+        // if (src_clean->size() < 50 || tgt_clean->size() < 50) {
+        //     ROS_WARN("GICP: too few points after cleaning (src=%zu, tgt=%zu)", src_clean->size(), tgt_clean->size());
+        //     return;
+        // }
 
         nano_gicp::NanoGICP<pcl::PointXYZI, pcl::PointXYZI> gicp;
         // Set K adaptively but keep within a robust range
         // int k_rand = std::min<int>(64, std::max<int>(10, (int)std::sqrt((double)std::min(src_clean->size(), tgt_clean->size()))));
-        gicp.setCorrespondenceRandomness(128);
+        gicp.setCorrespondenceRandomness(64);
         gicp.setMaxCorrespondenceDistance(0.5);
         gicp.setMaximumIterations(128);
         gicp.setTransformationEpsilon(1e-3);
@@ -1208,12 +1215,11 @@ public:
         try
         {
             std::cout << "doooooooooooooo icp for  set data" << std::endl;
-            gicp.setInputSource(src_clean);
-            gicp.setInputTarget(tgt_clean);
+            gicp.setInputSource(cureKeyframeCloud);
+            gicp.setInputTarget(prevKeyframeCloud);
             gicp.calculateSourceCovariances();
             gicp.calculateTargetCovariances();
             std::cout << "doooooooooooooo icp for  set data ok" << std::endl;
-
 
             pcl::PointCloud<pcl::PointXYZI> aligned;
             // Use a proper initial guess to stabilize convergence
@@ -1225,9 +1231,13 @@ public:
             bool converged = gicp.hasConverged();
             float score = 999.0f;
             score = gicp.getFitnessScore();
-            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_prevKeyframeCloud.pcd", *tgt_clean);
+
+            if (converged == false || score > historyKeyframeFitnessScore)
+                return;
+
+            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_prevKeyframeCloud.pcd", *prevKeyframeCloud);
             pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_unused_result.pcd", aligned);
-            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_cureKeyframeCloud.pcd_" + std::to_string(score), *src_clean);
+            pcl::io::savePCDFileBinary(savePCDDirectory + "/loop_gicp/" + std::to_string(cnt) + "_cureKeyframeCloud.pcd_" + std::to_string(score), *cureKeyframeCloud);
             cnt++;
 
             Eigen::Matrix4d T_last_to_cur_refined = gicp.getFinalTransformation().cast<double>();
@@ -1274,9 +1284,12 @@ public:
         gtsam::Pose3 poseTo =
                 pclPointTogtsamPose3(copy_cloudKeyPoses6D->points[loopKeyPre]);
         gtsam::Vector Vector6(6);
-        float noiseScore = gicp.getFitnessScore();
+        float noiseScore = gicp.getFitnessScore() / 10.0 ;
+        noiseScore = noiseScore*noiseScore;
         Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore,
                 noiseScore;
+        std::cout << "add loopNoise: noiseScore*noiseScore (roll, pitch, yaw, x, y, z): " 
+                      << Vector6.transpose() << std::endl;
         noiseModel::Diagonal::shared_ptr constraintNoise =
                 noiseModel::Diagonal::Variances(Vector6);
 
@@ -2354,6 +2367,7 @@ public:
             noiseModel::Diagonal::shared_ptr priorNoise =
                     noiseModel::Diagonal::Variances(
                             (Vector(6) << 1e-2, 1e-2, M_PI * M_PI, 1e8, 1e8, 1e8)
+                            // (Vector(6) << 1e-4, 1e-4, 1e-4, 1e-1, 1e-1, 1e8)
                                     .finished());  // rad*rad, meter*meter
 
             gtSAMgraph.add(PriorFactor<Pose3>(0, trans2gtsamPose(transformTobeMapped),
@@ -2364,6 +2378,7 @@ public:
             noiseModel::Diagonal::shared_ptr odometryNoise =
                     noiseModel::Diagonal::Variances(
                             (Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
+                            // (Vector(6) << 1e-8, 1e-8, 1e-8, 1e-1, 1e-1, 1e-1).finished());
             gtsam::Pose3 poseFrom =
                     pclPointTogtsamPose3(cloudKeyPoses6D->points.back());
             gtsam::Pose3 poseTo = trans2gtsamPose(transformTobeMapped);
@@ -2429,7 +2444,9 @@ public:
             // 确保噪声不会太小，避免系统过约束
             float min_noise = 0.01f;  // 最小噪声阈值
             gtsam::Vector Vector3(3);
-            Vector3 << max(noise_x, min_noise), max(noise_y, min_noise), max(noise_z, min_noise);
+            // Vector3 << max(noise_x, min_noise), max(noise_y, min_noise), max(noise_z, min_noise);
+            Vector3 << noise_x*noise_x / 100.0, noise_y*noise_y / 100.0, noise_z*noise_z / 100.0;
+            std::cout << "Adding GPS Factor with noise: " << Vector3.transpose() << std::endl;
             noiseModel::Diagonal::shared_ptr gps_noise =
                     noiseModel::Diagonal::Variances(Vector3);
             gtsam::GPSFactor gps_factor(cloudKeyPoses3D->size(),
@@ -2494,6 +2511,16 @@ public:
             int indexTo = loopIndexQueue[i].second;
             gtsam::Pose3 poseBetween = loopPoseQueue[i];
             gtsam::noiseModel::Diagonal::shared_ptr noiseBetween = loopNoiseQueue[i];
+
+            // 打印 noiseBetween 的方差信息
+            gtsam::Vector variances = noiseBetween->sigmas().array().square();
+            std::cout << "=== LOOP FACTOR NOISE INFO ===" << std::endl;
+            std::cout << "Noise variances (roll, pitch, yaw, x, y, z): " 
+                      << variances.transpose() << std::endl;
+            std::cout << "Noise sigmas (roll, pitch, yaw, x, y, z): " 
+                      << noiseBetween->sigmas().transpose() << std::endl;
+            std::cout << "==============================" << std::endl;
+            
             mtxGraph.lock();
             gtSAMgraph.add(
                     BetweenFactor<Pose3>(indexFrom, indexTo, poseBetween, noiseBetween));
@@ -2620,14 +2647,20 @@ public:
 
 
         // save keyframe cloud to pcd by ln
-        std::stringstream filename;
-        filename << savePCDDirectory + "pcd/" << std::fixed << std::setprecision(3) << timeLaserInfoCur << ".pcd";
-        ROS_WARN("Saved full cloud to: %s with %d points", filename.str().c_str(), thislaserCloudRawKeyFrame->size());
-        thislaserCloudRawKeyFrame->height = 1;
-        thislaserCloudRawKeyFrame->width = thislaserCloudRawKeyFrame->points.size();
-        pcl::io::savePCDFileASCII(filename.str(), *thislaserCloudRawKeyFrame);
-        thislaserCloudRawKeyFrame->clear();
-
+        try
+        {
+            std::stringstream filename;
+            filename << savePCDDirectory + "pcd/" << std::fixed << std::setprecision(3) << timeLaserInfoCur << ".pcd";
+            ROS_WARN("Saved full cloud to: %s with %d points", filename.str().c_str(), thislaserCloudRawKeyFrame->size());
+            thislaserCloudRawKeyFrame->height = 1;
+            thislaserCloudRawKeyFrame->width = thislaserCloudRawKeyFrame->points.size();
+            // pcl::io::savePCDFileASCII(filename.str(), *thislaserCloudRawKeyFrame);
+            thislaserCloudRawKeyFrame->clear();
+        }
+        catch (...)
+        {
+            ROS_ERROR("Failed to save full cloud"); 
+        }
         // save keyframe pose odom
         //        nav_msgs::Odometry updatesOdometryROS;
         //        transformEiegn2Odom(timeLaserInfoCur, updatesOdometryROS,

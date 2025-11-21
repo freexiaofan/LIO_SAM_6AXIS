@@ -2,7 +2,8 @@
     <arg name="project" default="lio_sam_6axis"/>
     <!-- <arg name="bag_path" default="/mnt/nvme0n1p2/data/1011_hesai_x1_6.bag"/> -->
     <!-- <arg name="sequence" default="qcsl"/> -->
-    <arg name="bag_path" default="/mnt/nvme0n1p2/data/1030_1.bag"/>
+    <!-- <arg name="bag_path" default="/mnt/nvme0n1p2/data/1030_1.bag"/> -->
+    <arg name="bag_path" default="/media/tyjt/Elements/nongan_rewrite_bag/1023_2.bag"/>
     <arg name="sequence" default="nongan"/>
 
     <!-- Parameters -->
@@ -20,17 +21,12 @@
     <!-- <include file="$(find lio_sam_6axis)/launch/include/module_robot_state_publisher.launch"/> -->
 
     <!--- Run Navsat -->
-    <node pkg="lio_sam_6axis" type="lio_sam_6axis_gpsOdometry" name="lio_sam_6axis_gpsOdometry" output="screen" />
+    <!-- <node pkg="lio_sam_6axis" type="lio_sam_6axis_gpsOdometry" name="lio_sam_6axis_gpsOdometry" output="screen" /> -->
 
     <!--- Run Rviz-->
     <!-- <node pkg="rviz" type="rviz" name="$(arg project)_rviz"
           args="-d $(find lio_sam_6axis)/launch/include/config/vlp.rviz"/> -->
 
-    <node pkg="rosbag" type="play" name="bag_play"   args="$(arg bag_path) --clock -d 3 -s 0  -r 0.5  "/>
+    <node pkg="rosbag" type="play" name="bag_play"   args="$(arg bag_path) --clock -d 5 -s 0  -r 0.10 "/>
 
-    <node pkg="tf" type="static_transform_publisher" name="camera_base_link"
-          args="0 0 0 0  0  0.7071068 0.7071068  imu_link hesai_lidar 100" />
-
-    <node pkg="tf" type="static_transform_publisher" name="base_link"
-          args="0 0 0  0  0  0   base_link imu_link 100" />
 </launch>

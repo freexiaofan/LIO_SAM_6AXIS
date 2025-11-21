@@ -2,7 +2,8 @@ lio_sam_6axis:
 
   # Topics
   pointCloudTopic: "/lidar_points"               # Point cloud data
-  imuTopic: "/lidar_imu"
+  # imuTopic: "/lidar_imu"
+  imuTopic: "/gnss_imu"
 
   odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
   gpsTopic: "/gps/fix111"                   # GPS odometry topic from navsat, see module_navsat.launch file
@@ -22,7 +23,7 @@ lio_sam_6axis:
 
   # Export settings
   savePCD: true                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
-  savePCDDirectory: "/mnt/nvme0n1p2/data/lio_data/"        # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
+  savePCDDirectory: "/mnt/nvme0n1p2/data/23_2/"        # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
   scene_name: "exp04"
 
   #   Sensor Settings
@@ -37,7 +38,7 @@ lio_sam_6axis:
   debugLidarTimestamp: false
 
   # IMU Settings
-  imuFrequence: 100
+  imuFrequence: 125
 #  imuAccNoise: 0.0001688956233495657
   imuAccNoise: 0.01
 #  imuGyrNoise: 0.0010679343003532472
@@ -57,7 +58,7 @@ lio_sam_6axis:
   imuRPYWeight: 0.01
 
   #  # Extrinsics (lidar -> IMU)
-  extrinsicTrans: [ 0.0, 0.00, 0.25 ]
+  extrinsicTrans: [ -0.06, 0.0, 0.27  ]
   extrinsicRot: [1.0000000, 0.0000000,  0.0000000,
                  0.0000000,  1.0000000,  0.0000000,
                  0.0000000,  0.0000000,  1.0000000]
@@ -75,7 +76,7 @@ lio_sam_6axis:
   # voxel filter paprams
   odometrySurfLeafSize: 0.2                     # default: 0.4 - outdoor, 0.2 - indoor
   mappingCornerLeafSize: 0.1                    # default: 0.2 - outdoor, 0.1 - indoor
-  mappingSurfLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
+  mappingSurfLeafSize: 0.2                     # default: 0.4 - outdoor, 0.2 - indoor
 
   # robot motion constraint (in case you are using a 2D robot)
   z_tollerance: 1000                            # meters
@@ -97,8 +98,8 @@ lio_sam_6axis:
   surroundingKeyframeSize: 20                   # submap size (when loop closure enabled)
   historyKeyframeSearchRadius: 30.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
   historyKeyframeSearchTimeDiff: 50.0           # seconds, key frame that is n seconds older will be considered for loop closure
-  historyKeyframeSearchNum: 10                  # number of hostory key frames will be fused into a submap for loop closure
-  historyKeyframeFitnessScore: 0.25            # icp threshold, the smaller the better alignment
+  historyKeyframeSearchNum: 20                  # number of hostory key frames will be fused into a submap for loop closure
+  historyKeyframeFitnessScore: 0.05            # icp threshold, the smaller the better alignment
 
   # Visualization
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius

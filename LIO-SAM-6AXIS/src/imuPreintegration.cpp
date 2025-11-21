@@ -204,7 +204,7 @@ public:
 
     IMUPreintegration() {
         subImu = nh.subscribe<sensor_msgs::Imu>(
-                imuTopic, 2000, &IMUPreintegration::imuHandler, this,
+                imuTopic, 20000, &IMUPreintegration::imuHandler, this,
                 ros::TransportHints().tcpNoDelay());
         subOdometry = nh.subscribe<nav_msgs::Odometry>(
                 "lio_sam_6axis/mapping/odometry_incremental", 5,
